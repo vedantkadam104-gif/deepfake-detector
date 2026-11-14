@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DeepShield AI — Deepfake Forensic Studio</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <!-- Top Status Bar -->
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-icon">DS</div>
+        <div>
+          <h1>DeepShield AI</h1>
+          <p class="subtitle">Deepfake Forensic Studio · Spatial + 2D FFT + ELA</p>
+        </div>
+      </div>
+
+      <div class="status-pills">
+        <span id="pill-gpu" class="pill pill-neutral">GPU: Checking...</span>
+        <span id="pill-engine" class="pill pill-accent">Engine: Loading...</span>
+        <span id="pill-tta" class="pill pill-success">TTA: 4x Multi-Crop</span>
+        <button id="btn-open-train" class="btn-secondary">Train on 1.4L Dataset</button>
+      </div>
+    </header>
+
+    <main class="main-grid">
+      <!-- Left Column: Upload & Controls -->
+      <section class="card upload-card">
+        <h2>Analyze Image or Video</h2>
+        <p class="muted">
+          Automatic face detection (+22% seam margin), 4-view Test-Time Augmentation, Grad-CAM localization, and spectral forensics.
+        </p>
+
+        <div id="dropzone" class="dropzone" tabindex="0">
+          <input id="file-input" type="file" accept="image/*,video/*" hidden />
+          <div class="dropzone-icon">⬆️</div>
+          <p class="dropzone-title">Drop an image or video here</p>
+          <p class="dropzone-sub">Supports JPG, PNG, WEBP, MP4, MOV, AVI, WEBM</p>
+          <button id="btn-browse" class="btn-primary" type="button">Select Media File</button>
+        </div>
+
+        <div class="samples-bar">
+          <span class="samples-label">Quick Demo:</span>
+          <button class="btn-chip" data-sample="authentic">Sample Portrait</button>
+          <button class="btn-chip" data-sample="synthetic">Sample Splice + GAN</button>
+        </div>
+
+        <div id="loading-box" class="loading-box hidden">
+          <div class="spinner"></div>
+          <div>
+            <div class="loading-title">Running Forensic Pipeline...</div>
+            <div class="loading-sub">Extracting face, running 4x TTA inference, computing Grad-CAM, 2D FFT &amp; ELA maps</div>
+          </div>
+        </div>
+
+        <div id="error-box" class="error-box hidden"></div>
+      </section>
+
+      <!-- Right Column: Results Dashboard -->
+      <section class="card results-card">
+        <div id="empty-state" class="empty-state">
+          <div class="empty-icon">🔍</div>
+          <h3>Ready for Forensic Inspection</h3>
+          <p class="muted">
+            Upload a face photo, social media screenshot, or video clip to inspect neural manipulation probabilities, Grad-CAM heatmaps, frequency spectrum anomalies, and compression seams.
+          </p>
+        </div>
+
+        <div id="results-content" class="hidden">
+          <!-- Verdict Banner -->
+          <div id="verdict-banner" class="verdict-banner">
+            <div class="verdict-left">
+              <span id="verdict-badge" class="verdict-badge">AUTHENTIC MEDIA</span>
+              <h2 id="verdict-title">No Manipulation Detected</h2>
+              <p id="verdict-meta" class="muted"></p>
+            </div>
+            <div class="confidence-gauge">
+              <div class="gauge-value" id="gauge-value">0%</div>
+              <div class="gauge-label">Confidence</div>
+            </div>
+          </div>
+
+          <!-- Probability Bars -->
+          <div class="prob-section">
+            <div class="prob-row">
+              <div class="prob-header">
+                <span>Fake / Manipulated Probability</span>
+                <strong id="fake-prob-text">0.0%</strong>
+              </div>
+              <div class="bar-track">
+                <div id="fake-prob-bar" class="bar-fill bar-fake" style="width: 0%"></div>
+              </div>
+            </div>
+            <div class="prob-row">
+              <div class="prob-header">
+                <span>Real / Authentic Probability</span>
+                <strong id="real-prob-text">0.0%</strong>
+              </div>
+              <div class="bar-track">
+                <div id="real-prob-bar" class="bar-fill bar-real" style="width: 0%"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Forensic Sub-Scores -->
+          <div class="metrics-grid">
+            <div class="metric-tile">
+              <span class="metric-label">Neural Spatial Score</span>
+              <span id="m-neural" class="metric-val">—</span>
+            </div>
+            <div class="metric-tile">
+              <span class="metric-label">2D FFT Spectral Score</span>
+              <span id="m-fft" class="metric-val">—</span>
+            </div>
+            <div class="metric-tile">
+              <span class="metric-label">ELA Compression Score</span>
+              <span id="m-ela" class="metric-val">—</span>
+            </div>
+            <div class="metric-tile">
+              <span class="metric-label">Boundary Seam Score</span>
+              <span id="m-seam" class="metric-val">—</span>
+            </div>
+          </div>
+
+          <!-- Video Timeline (Hidden for Images) -->
+          <div id="video-timeline-section" class="timeline-section hidden">
+            <h3>Video Frame-by-Frame Manipulation Timeline</h3>
+            <p id="video-timeline-sub" class="muted"></p>
+            <div id="timeline-bars" class="timeline-bars"></div>
+          </div>
+
+          <!-- 4-Panel Visual Forensic Inspector -->
+          <h3 class="section-heading">4-Panel Visual Forensic Inspector</h3>
+          <div class="visuals-grid">
+            <figure class="visual-panel">
+              <img id="img-preview" alt="Face Detection" />
+              <figcaption>1. Face Detection &amp; Seam Margin</figcaption>
+            </figure>
+            <figure class="visual-panel">
+              <img id="img-gradcam" alt="Grad-CAM Heatmap" />
+              <figcaption>2. Grad-CAM Manipulation Heatmap</figcaption>
+            </figure>
+            <figure class="visual-panel">
+              <img id="img-fft" alt="2D FFT Spectrum" />
+              <figcaption>3. 2D FFT Frequency Spectrum</figcaption>
+            </figure>
+            <figure class="visual-panel">
+              <img id="img-ela" alt="Error Level Analysis" />
+              <figcaption>4. Error Level Analysis (ELA)</figcaption>
+            </figure>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Training Guide Modal -->
+  <div id="train-modal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>Train on Your 1.4 Lakh Dataset (RTX 3050 Optimized)</h2>
+        <button id="btn-close-train" class="btn-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="muted">
+          Use these commands inside <code>C:\Users\vedan\.gemini\antigravity\scratch\deepfake-detector</code> to verify your 140k dataset and train <strong>DeepfakeEfficientNet</strong> (Spatial + Radial FFT) with FP16 mixed precision for 95–98%+ accuracy.
+        </p>
+
+        <h4>1. Inspect &amp; Verify Your 1.4 Lakh Dataset</h4>
+        <pre><code>.\.venv\Scripts\python.exe check_dataset.py --data-dir "PATH_TO_YOUR_140K_FOLDER"</code></pre>
+
+        <h4>2. Run Two-Phase RTX 3050 Training (FP16 + Cosine Annealing + EMA)</h4>
+        <pre><code>.\.venv\Scripts\python.exe train.py --data-dir "PATH_TO_YOUR_140K_FOLDER" --epochs 12 --batch-size 32 --grad-accum 2</code></pre>
+
+        <h4>3. Evaluate with 4x Test-Time Augmentation (TTA)</h4>
+        <pre><code>.\.venv\Scripts\python.exe evaluate.py --data-dir "PATH_TO_YOUR_140K_FOLDER" --split test</code></pre>
+
+        <p class="note">
+          Once <code>checkpoints/best_model.pt</code> is created, click <strong>Reload Engine</strong> below (or restart the server) to switch the web app to your custom 1.4L checkpoint!
+        </p>
+        <div class="modal-actions">
+          <button id="btn-reload-engine" class="btn-primary">Reload Active Engine</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

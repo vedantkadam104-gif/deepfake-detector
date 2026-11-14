@@ -1,0 +1,6 @@
+{
+  "fake_threshold": 0.885,
+  "val_acc": 0.9697,
+  "test_acc": 0.9628,
+  "test_auc": 0.9947
+}
