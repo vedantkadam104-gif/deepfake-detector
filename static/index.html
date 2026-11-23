@@ -34,6 +34,16 @@
           Automatic face detection (+22% seam margin), 4-view Test-Time Augmentation, Grad-CAM localization, and spectral forensics.
         </p>
 
+        <div class="mode-selector">
+          <label for="mode-select" class="mode-label">Detection Mode</label>
+          <select id="mode-select" class="mode-select">
+            <option value="ensemble" selected>Multi-Model Ensemble (4,800+ AI Generators + Local)</option>
+            <option value="faceswap">Face-Swap Specialist (Wvolf 190k ViT)</option>
+            <option value="community">CommunityForensics ViT Only (2.7M Universal AI)</option>
+            <option value="local">Local EfficientNet-B0 Only (96.3% Test Acc)</option>
+          </select>
+        </div>
+
         <div id="dropzone" class="dropzone" tabindex="0">
           <input id="file-input" type="file" accept="image/*,video/*" hidden />
           <div class="dropzone-icon">⬆️</div>
@@ -123,6 +133,12 @@
               <span class="metric-label">Boundary Seam Score</span>
               <span id="m-seam" class="metric-val">—</span>
             </div>
+          </div>
+
+          <!-- Specialist Model Votes -->
+          <div id="votes-section" class="votes-section hidden">
+            <h3>Specialist Model Votes</h3>
+            <div id="votes-list" class="votes-list"></div>
           </div>
 
           <!-- Video Timeline (Hidden for Images) -->

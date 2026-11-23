@@ -2,6 +2,7 @@ const els = {
   pillGpu: document.getElementById("pill-gpu"),
   pillEngine: document.getElementById("pill-engine"),
   pillTta: document.getElementById("pill-tta"),
+  modeSelect: document.getElementById("mode-select"),
   dropzone: document.getElementById("dropzone"),
   fileInput: document.getElementById("file-input"),
   btnBrowse: document.getElementById("btn-browse"),
@@ -22,6 +23,8 @@ const els = {
   mFft: document.getElementById("m-fft"),
   mEla: document.getElementById("m-ela"),
   mSeam: document.getElementById("m-seam"),
+  votesSection: document.getElementById("votes-section"),
+  votesList: document.getElementById("votes-list"),
   videoTimelineSection: document.getElementById("video-timeline-section"),
   videoTimelineSub: document.getElementById("video-timeline-sub"),
   timelineBars: document.getElementById("timeline-bars"),
@@ -99,6 +102,29 @@ function renderResult(data) {
   els.mEla.textContent = `${(f.ela_compression_score * 100).toFixed(1)}%`;
   els.mSeam.textContent = `${(f.seam_consistency_score * 100).toFixed(1)}%`;
 
+  if (Array.isArray(data.model_votes) && data.model_votes.length > 0) {
+    els.votesSection.classList.remove("hidden");
+    els.votesList.innerHTML = "";
+    data.model_votes.forEach((v) => {
+      const pct = (v.fake_probability * 100).toFixed(1);
+      const isFakeVote = v.fake_probability >= 0.5;
+      const row = document.createElement("div");
+      row.className = "vote-row";
+      row.innerHTML = `
+        <div class="vote-header">
+          <span>${v.name}</span>
+          <strong>${pct}% Fake</strong>
+        </div>
+        <div class="vote-track">
+          <div class="vote-fill" style="width: ${pct}%; background: ${isFakeVote ? "#ef4444" : "#10b981"}"></div>
+        </div>
+      `;
+      els.votesList.appendChild(row);
+    });
+  } else {
+    els.votesSection.classList.add("hidden");
+  }
+
   if (isVideo && Array.isArray(data.timeline)) {
     els.videoTimelineSection.classList.remove("hidden");
     els.videoTimelineSub.textContent = `Showing fake probability across ${data.timeline.length} sampled frames (visuals below correspond to peak suspicious frame at ${frameSource.peak_timestamp_sec}s).`;
@@ -136,6 +162,7 @@ async function uploadFile(file) {
   const endpoint = isVideo ? "/api/analyze/video" : "/api/analyze/image";
   const form = new FormData();
   form.append("file", file);
+  form.append("mode", els.modeSelect?.value || "ensemble");
 
   setLoading(true);
   try {
@@ -153,7 +180,8 @@ async function uploadFile(file) {
 async function runSample(sampleId) {
   setLoading(true);
   try {
-    const res = await fetch(`/api/analyze/sample/${sampleId}`, { method: "POST" });
+    const mode = encodeURIComponent(els.modeSelect?.value || "ensemble");
+    const res = await fetch(`/api/analyze/sample/${sampleId}?mode=${mode}`, { method: "POST" });
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || "Sample analysis failed");
     renderResult(data);

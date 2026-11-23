@@ -21,6 +21,12 @@ class GradCAMExplainer:
         self.device = device
 
     @staticmethod
+    def _extract_target_score(logits: torch.Tensor, target_class: int) -> torch.Tensor:
+        if logits.shape[-1] == 1:
+            return logits[0, 0].float() if target_class == 1 else -logits[0, 0].float()
+        return logits[0, target_class].float()
+
+    @staticmethod
     def _find_last_conv_layer(module: nn.Module) -> Optional[nn.Module]:
         last_conv = None
         for m in module.modules():
@@ -66,19 +72,20 @@ class GradCAMExplainer:
         h_bwd = target_layer.register_full_backward_hook(bwd_hook)
 
         try:
-            x = input_tensor.clone().detach().to(self.device).requires_grad_(True)
+            model_dtype = next(model.parameters()).dtype
+            x = input_tensor.clone().detach().to(device=self.device, dtype=model_dtype).requires_grad_(True)
             model.zero_grad(set_to_none=True)
             with torch.enable_grad():
                 out = model(pixel_values=x) if is_hf else model(x)
                 logits = out.logits if hasattr(out, "logits") else out
-                score = logits[0, target_class]
+                score = self._extract_target_score(logits, target_class)
                 score.backward()
 
             if not activations or not gradients:
                 return self._explain_input_saliency(model, input_tensor, pil_img, target_class, is_hf=is_hf)
 
-            act = activations[0][0]  # [C, H, W]
-            grad = gradients[0][0]   # [C, H, W]
+            act = activations[0][0].float()  # [C, H, W]
+            grad = gradients[0][0].float()   # [C, H, W]
             if act.ndim != 3:
                 return self._explain_input_saliency(model, input_tensor, pil_img, target_class, is_hf=is_hf)
             weights = grad.mean(dim=(1, 2), keepdim=True)
@@ -99,6 +106,7 @@ class GradCAMExplainer:
     ) -> str:
         """Computes token-gradient or conv Grad-CAM heatmap for HuggingFace vision models."""
         hf_model.eval()
+        model_dtype = next(hf_model.parameters()).dtype
         # Check if ViT-style encoder exists
         if hasattr(hf_model, "vit") and hasattr(hf_model.vit, "encoder"):
             target_layer = getattr(hf_model.vit, "layernorm", None) or hf_model.vit.encoder.layer[-1].layernorm_before
@@ -115,18 +123,18 @@ class GradCAMExplainer:
             h_fwd = target_layer.register_forward_hook(fwd_hook)
             h_bwd = target_layer.register_full_backward_hook(bwd_hook)
             try:
-                x = pixel_values.clone().detach().to(self.device).requires_grad_(True)
+                x = pixel_values.clone().detach().to(device=self.device, dtype=model_dtype).requires_grad_(True)
                 hf_model.zero_grad(set_to_none=True)
                 with torch.enable_grad():
                     out = hf_model(pixel_values=x)
                     logits = out.logits if hasattr(out, "logits") else out
-                    score = logits[0, target_class]
+                    score = self._extract_target_score(logits, target_class)
                     score.backward()
 
                 if activations and gradients:
                     # [1, 1 + num_patches, hidden] -> drop CLS token
-                    act = activations[0][0, 1:, :]
-                    grad = gradients[0][0, 1:, :]
+                    act = activations[0][0, 1:, :].float()
+                    grad = gradients[0][0, 1:, :].float()
                     weights = torch.relu((act * grad).sum(dim=-1))
                     n_patches = weights.shape[0]
                     grid = int(round(math.sqrt(n_patches)))
@@ -154,13 +162,14 @@ class GradCAMExplainer:
         target_class: int,
         is_hf: bool = False,
     ) -> str:
-        x = input_tensor.clone().detach().to(self.device).requires_grad_(True)
+        model_dtype = next(model.parameters()).dtype
+        x = input_tensor.clone().detach().to(device=self.device, dtype=model_dtype).requires_grad_(True)
         model.zero_grad(set_to_none=True)
         with torch.enable_grad():
             out = model(pixel_values=x).logits if is_hf else model(x)
-            score = out[0, target_class]
+            score = self._extract_target_score(out, target_class)
             score.backward()
-        sal = x.grad[0].abs().max(dim=0)[0].cpu().numpy()
+        sal = x.grad[0].float().abs().max(dim=0)[0].cpu().numpy()
         sal = cv2.GaussianBlur(sal, (15, 15), 0)
         sal = (sal - sal.min()) / (sal.max() - sal.min() + 1e-6)
         model.zero_grad(set_to_none=True)

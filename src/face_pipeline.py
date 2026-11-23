@@ -26,6 +26,7 @@ def pil_to_base64(img: Image.Image, fmt: str = "PNG") -> str:
 @dataclass
 class FaceExtractionResult:
     cropped_pil: Image.Image
+    tight_face_pil: Image.Image
     bbox: Optional[Tuple[int, int, int, int]]  # (x1, y1, x2, y2) in original image coords
     face_detected: bool
     already_tight_crop: bool
@@ -86,6 +87,7 @@ class FaceExtractor:
             if face_area_ratio > 0.55 or (max(h, w) <= 320 and face_area_ratio > 0.35):
                 already_tight_crop = True
                 cropped_pil = rgb_pil
+                tight_face_pil = rgb_pil
                 crop_box = (0, 0, w, h)
             else:
                 # Expand bbox by margin (default 22%) and make roughly square
@@ -98,6 +100,14 @@ class FaceExtractor:
                 ny2 = min(h, int(round(cy + side / 2.0)))
                 crop_box = (nx1, ny1, nx2, ny2)
                 cropped_pil = rgb_pil.crop(crop_box)
+
+                # Tight crop (6% margin) for Face-Swap ViT specialists
+                side_t = max(bw, bh) * 1.12
+                tx1 = max(0, int(round(cx - side_t / 2.0)))
+                ty1 = max(0, int(round(cy - side_t / 2.0)))
+                tx2 = min(w, int(round(cx + side_t / 2.0)))
+                ty2 = min(h, int(round(cy + side_t / 2.0)))
+                tight_face_pil = rgb_pil.crop((tx1, ty1, tx2, ty2))
         else:
             # Heuristic fallback: if small square portrait crop, preserve full image; else center square crop
             aspect = max(w, h) / max(min(w, h), 1)
@@ -112,6 +122,7 @@ class FaceExtractor:
                 ny1 = max(0, cy - side // 2)
                 crop_box = (nx1, ny1, nx1 + side, ny1 + side)
                 cropped_pil = rgb_pil.crop(crop_box)
+            tight_face_pil = cropped_pil
 
         # Draw annotated preview
         annotated = cv2.cvtColor(rgb_np.copy(), cv2.COLOR_RGB2BGR)
@@ -126,6 +137,7 @@ class FaceExtractor:
 
         return FaceExtractionResult(
             cropped_pil=cropped_pil,
+            tight_face_pil=tight_face_pil,
             bbox=bbox,
             face_detected=face_detected,
             already_tight_crop=already_tight_crop,

@@ -10,7 +10,7 @@ from typing import Dict
 
 import cv2
 import numpy as np
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageDraw, ImageFilter
@@ -125,20 +125,23 @@ def api_samples() -> JSONResponse:
 
 
 @app.post("/api/analyze/sample/{sample_id}")
-def api_analyze_sample(sample_id: str) -> JSONResponse:
+def api_analyze_sample(sample_id: str, mode: str = "ensemble") -> JSONResponse:
     samples = _ensure_demo_samples()
     if sample_id not in samples:
         raise HTTPException(status_code=404, detail=f"Unknown sample '{sample_id}'")
     det = get_engine()
     with Image.open(samples[sample_id]["path"]) as img:
-        result = det.analyze_image(img)
+        result = det.analyze_image(img, mode=mode)
     result["filename"] = Path(samples[sample_id]["path"]).name
     result["media_type"] = "image"
     return JSONResponse(result)
 
 
 @app.post("/api/analyze/image")
-async def api_analyze_image(file: UploadFile = File(...)) -> JSONResponse:
+async def api_analyze_image(
+    file: UploadFile = File(...),
+    mode: str = Form("ensemble"),
+) -> JSONResponse:
     if not file.filename:
         raise HTTPException(status_code=400, detail="Missing image file.")
     raw = await file.read()
@@ -150,14 +153,17 @@ async def api_analyze_image(file: UploadFile = File(...)) -> JSONResponse:
         raise HTTPException(status_code=400, detail=f"Invalid image format: {exc}") from exc
 
     det = get_engine()
-    result = det.analyze_image(pil_img)
+    result = det.analyze_image(pil_img, mode=mode)
     result["filename"] = file.filename
     result["media_type"] = "image"
     return JSONResponse(result)
 
 
 @app.post("/api/analyze/video")
-async def api_analyze_video(file: UploadFile = File(...)) -> JSONResponse:
+async def api_analyze_video(
+    file: UploadFile = File(...),
+    mode: str = Form("ensemble"),
+) -> JSONResponse:
     if not file.filename:
         raise HTTPException(status_code=400, detail="Missing video file.")
     raw = await file.read()
@@ -172,7 +178,7 @@ async def api_analyze_video(file: UploadFile = File(...)) -> JSONResponse:
             tmp_path = tmp.name
 
         det = get_engine()
-        result = det.analyze_video(tmp_path, max_frames=16)
+        result = det.analyze_video(tmp_path, max_frames=16, mode=mode)
         result["filename"] = file.filename
         return JSONResponse(result)
     except ValueError as exc:

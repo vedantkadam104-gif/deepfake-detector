@@ -407,6 +407,78 @@ body {
   border-top: 1px solid var(--border);
 }
 
+.mode-selector {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mode-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.mode-select {
+  width: 100%;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  outline: none;
+}
+
+.mode-select:focus {
+  border-color: var(--accent);
+}
+
+.votes-section {
+  margin-bottom: 20px;
+  padding: 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.votes-section h3 {
+  margin: 0 0 10px;
+  font-size: 14px;
+}
+
+.votes-list {
+  display: grid;
+  gap: 10px;
+}
+
+.vote-row {
+  display: grid;
+  gap: 4px;
+}
+
+.vote-header {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.vote-track {
+  height: 7px;
+  background: #0f1624;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.vote-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.35s ease;
+}
+
 /* Modal */
 .modal {
   position: fixed;
