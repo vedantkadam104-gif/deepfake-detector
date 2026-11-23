@@ -1,12 +1,13 @@
-"""Unified Multi-Domain Deepfake Detection Engine.
+"""Unified Two-Stage Multi-Domain Deepfake Detection Engine.
 
-Combines 3 complementary specialists on CUDA (RTX 3050):
+Stage 1 (AI Generators + Low-FPR + Local Domain):
 1. CommunityForensics-DeepfakeDet-ViT (2.7M samples, 4,800+ AI generators, 95% zero-shot acc)
 2. prithivMLmods/deepfake-detector-model-v1 (SigLIP v1, ultra-low 2.5% Real FPR anchor)
 3. Local Custom DeepfakeEfficientNet + Radial 2D-FFT (calibrated at 96.28% on local dataset)
 
-Plus an on-demand dedicated Face-Swap specialist mode:
-4. Wvolf/ViT_Deepfake_Detection (190k Face-Swap ViT on tight face crop)
+Stage 2 (Automatic Triple-Consensus Face-Swap Gate on 6% tight inner-face crop):
+4. Wvolf/ViT_Deepfake_Detection + Adieee5/deepfake-detection-ViT-CrossTraining + dima806/deepfake_vs_real_image_detection
+Runs automatically whenever Stage 1 predicts Real (< 0.50) to catch real-background Face-Swaps without raising false alarms on authentic selfies.
 """
 
 from __future__ import annotations
@@ -32,6 +33,8 @@ from .transforms import IMG_SIZE, get_eval_transforms, get_tta_transforms
 COMMUNITY_HF_MODEL_ID = "buildborderless/CommunityForensics-DeepfakeDet-ViT"
 SIGLIP_HF_MODEL_ID = "prithivMLmods/deepfake-detector-model-v1"
 WVOLF_HF_MODEL_ID = "Wvolf/ViT_Deepfake_Detection"
+ADIEEE_HF_MODEL_ID = "Adieee5/deepfake-detection-ViT-CrossTraining"
+DIMA_HF_MODEL_ID = "dima806/deepfake_vs_real_image_detection"
 
 
 def _resolve_hf_indices(id2label: Dict[Any, Any]) -> Tuple[int, int]:
@@ -39,7 +42,7 @@ def _resolve_hf_indices(id2label: Dict[Any, Any]) -> Tuple[int, int]:
     fake_idx, real_idx = 1, 0
     for idx, lbl in id2label.items():
         low = str(lbl).lower()
-        if any(w in low for w in ("fake", "deepfake", "synthetic", "artificial", "ai")):
+        if any(w in low for w in ("fake", "deepfake", "synthetic", "artificial", "ai", "manipulated")):
             fake_idx = int(idx)
         elif any(w in low for w in ("real", "realism", "authentic", "human")):
             real_idx = int(idx)
@@ -59,7 +62,7 @@ class HFSpecialist:
 
 
 class DeepfakeDetectionEngine:
-    """Orchestrates face extraction, 3-model ensemble, Face-Swap specialist mode, Grad-CAM, and forensics."""
+    """Orchestrates dual-crop face extraction, automatic two-stage detection, Grad-CAM, and forensics."""
 
     def __init__(self, checkpoint_path: Optional[Path] = None) -> None:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -80,6 +83,8 @@ class DeepfakeDetectionEngine:
         self.community_spec: Optional[HFSpecialist] = None
         self.siglip_spec: Optional[HFSpecialist] = None
         self.wvolf_spec: Optional[HFSpecialist] = None
+        self.adieee_spec: Optional[HFSpecialist] = None
+        self.dima_spec: Optional[HFSpecialist] = None
 
         self.active_engine: str = "uninitialized"
         self.load_error: Optional[str] = None
@@ -121,17 +126,33 @@ class DeepfakeDetectionEngine:
             self.load_error = f"{self.load_error}; {msg}" if self.load_error else msg
             return None
 
-    def _ensure_wvolf_loaded(self) -> Optional[HFSpecialist]:
+    def _ensure_faceswap_gate_loaded(self) -> bool:
         if self.wvolf_spec is None:
             self.wvolf_spec = self._load_hf_specialist(
                 key="wvolf",
                 display_name="Face-Swap Specialist (Wvolf 190k ViT)",
                 model_id=WVOLF_HF_MODEL_ID,
             )
-        return self.wvolf_spec
+        if self.adieee_spec is None:
+            self.adieee_spec = self._load_hf_specialist(
+                key="adieee",
+                display_name="DFDC Face-Swap ViT (Adieee5)",
+                model_id=ADIEEE_HF_MODEL_ID,
+            )
+        if self.dima_spec is None:
+            self.dima_spec = self._load_hf_specialist(
+                key="dima",
+                display_name="General Deepfake ViT (dima806 190k)",
+                model_id=DIMA_HF_MODEL_ID,
+            )
+        return (
+            self.wvolf_spec is not None
+            and self.adieee_spec is not None
+            and self.dima_spec is not None
+        )
 
     def reload_models(self) -> None:
-        """Loads CommunityForensics 2.7M, SigLIP v1, and Local EfficientNet; keeps Wvolf lazy."""
+        """Loads Stage 1 specialists, Local EfficientNet, and Stage 2 Face-Swap consensus models."""
         self.load_error = None
         self.custom_model = None
         self.custom_ckpt_meta = {}
@@ -163,11 +184,14 @@ class DeepfakeDetectionEngine:
                 model_id=SIGLIP_HF_MODEL_ID,
             )
 
+        gate_ready = self._ensure_faceswap_gate_loaded()
         has_comm = self.community_spec is not None
         has_siglip = self.siglip_spec is not None
         has_local = self.custom_model is not None
 
-        if has_comm and has_siglip and has_local:
+        if has_comm and has_siglip and has_local and gate_ready:
+            self.active_engine = "Auto Multi-Domain Ensemble (AI + Face-Swap + Local)"
+        elif has_comm and has_siglip and has_local:
             self.active_engine = "3-Model Ensemble (CommunityForensics 2.7M + SigLIP v1 + Local EfficientNet)"
         elif has_comm and has_local:
             self.active_engine = "Hybrid Ensemble (CommunityForensics 2.7M + Local EfficientNet)"
@@ -201,7 +225,9 @@ class DeepfakeDetectionEngine:
                 "community": self.community_spec is not None,
                 "siglip": self.siglip_spec is not None,
                 "local": self.custom_model is not None,
-                "wvolf_cached": self.wvolf_spec is not None,
+                "wvolf": self.wvolf_spec is not None,
+                "adieee": self.adieee_spec is not None,
+                "dima806": self.dima_spec is not None,
             },
             "load_error": self.load_error,
         }
@@ -221,9 +247,9 @@ class DeepfakeDetectionEngine:
             fake_prob = 0.5 + 0.5 * ((raw_fake - t) / max(1.0 - t, 1e-6))
         return float(np.clip(fake_prob, 0.0, 1.0))
 
-    def _predict_hf_2tta_score(self, spec: HFSpecialist, pil_crop: Image.Image) -> float:
+    def _predict_hf_score(self, spec: HFSpecialist, pil_crop: Image.Image, use_2tta: bool = True) -> float:
         rgb = pil_crop.convert("RGB")
-        views = [rgb, ImageOps.mirror(rgb)]
+        views = [rgb, ImageOps.mirror(rgb)] if use_2tta else [rgb]
         inputs = spec.processor(images=views, return_tensors="pt")
         pixel_values = inputs["pixel_values"].to(self.device)
         if self.device.type == "cuda":
@@ -245,7 +271,11 @@ class DeepfakeDetectionEngine:
         return float(np.clip(fake_prob, 0.0, 1.0))
 
     def _explain_hf_specialist(self, spec: HFSpecialist, pil_crop: Image.Image, is_fake: bool) -> str:
-        target_class = 1 if spec.is_single_logit and is_fake else (0 if spec.is_single_logit else (spec.fake_idx if is_fake else spec.real_idx))
+        target_class = (
+            1
+            if spec.is_single_logit and is_fake
+            else (0 if spec.is_single_logit else (spec.fake_idx if is_fake else spec.real_idx))
+        )
         inputs = spec.processor(images=pil_crop.convert("RGB"), return_tensors="pt")
         pv = inputs["pixel_values"].to(self.device)
         return self.explainer.explain_hf_vision(spec.model, pv, pil_crop, target_class=target_class)
@@ -264,7 +294,7 @@ class DeepfakeDetectionEngine:
         mode: str = "ensemble",
         include_visuals: bool = True,
     ) -> Dict[str, Any]:
-        """Full dual-crop face extraction + specialist ensemble + smart Grad-CAM + forensics."""
+        """Full dual-crop face extraction + two-stage specialist ensemble + smart Grad-CAM + forensics."""
         norm_mode = (mode or "ensemble").strip().lower()
         if norm_mode not in {"ensemble", "faceswap", "community", "local"}:
             norm_mode = "ensemble"
@@ -277,23 +307,24 @@ class DeepfakeDetectionEngine:
         p_siglip: Optional[float] = None
         p_local: Optional[float] = None
         p_wvolf: Optional[float] = None
+        faceswap_gate_triggered = False
         model_votes: List[Dict[str, Any]] = []
 
         if norm_mode == "faceswap":
-            wvolf = self._ensure_wvolf_loaded()
-            if wvolf is None:
+            self._ensure_faceswap_gate_loaded()
+            if self.wvolf_spec is None:
                 raise RuntimeError(self.load_error or "Face-Swap specialist (Wvolf 190k ViT) could not be loaded.")
-            p_wvolf = self._predict_hf_2tta_score(wvolf, tight)
+            p_wvolf = self._predict_hf_score(self.wvolf_spec, tight, use_2tta=True)
             model_votes.append({
-                "name": wvolf.display_name,
+                "name": self.wvolf_spec.display_name,
                 "fake_probability": round(p_wvolf, 4),
             })
             fake_prob = p_wvolf
-            engine_label = wvolf.display_name
+            engine_label = self.wvolf_spec.display_name
         elif norm_mode == "community":
             if self.community_spec is None:
                 raise RuntimeError("CommunityForensics ViT model is not available.")
-            p_comm = self._predict_hf_2tta_score(self.community_spec, cropped)
+            p_comm = self._predict_hf_score(self.community_spec, cropped, use_2tta=True)
             model_votes.append({
                 "name": self.community_spec.display_name,
                 "fake_probability": round(p_comm, 4),
@@ -311,15 +342,15 @@ class DeepfakeDetectionEngine:
             fake_prob = p_local
             engine_label = f"Local Only ({self.local_display_name})"
         else:
-            # Default: 3-Model Ensemble (CommunityForensics 2.7M + SigLIP v1 + Local EfficientNet)
+            # Stage 1: CommunityForensics 2.7M + SigLIP v1 + Local EfficientNet-B0
             if self.community_spec is not None:
-                p_comm = self._predict_hf_2tta_score(self.community_spec, cropped)
+                p_comm = self._predict_hf_score(self.community_spec, cropped, use_2tta=True)
                 model_votes.append({
                     "name": self.community_spec.display_name,
                     "fake_probability": round(p_comm, 4),
                 })
             if self.siglip_spec is not None:
-                p_siglip = self._predict_hf_2tta_score(self.siglip_spec, cropped)
+                p_siglip = self._predict_hf_score(self.siglip_spec, cropped, use_2tta=True)
                 model_votes.append({
                     "name": self.siglip_spec.display_name,
                     "fake_probability": round(p_siglip, 4),
@@ -334,26 +365,49 @@ class DeepfakeDetectionEngine:
             if p_comm is not None and p_siglip is not None and p_local is not None:
                 weighted = 0.50 * p_comm + 0.35 * p_local + 0.15 * p_siglip
                 if p_comm >= 0.85:
-                    fake_prob = max(weighted, 0.80 * p_comm + 0.20 * p_siglip)
+                    stage1_fake = max(weighted, 0.80 * p_comm + 0.20 * p_siglip)
                 elif p_local >= 0.85 and p_comm >= 0.40:
-                    fake_prob = max(weighted, 0.70 * p_local + 0.30 * p_comm)
+                    stage1_fake = max(weighted, 0.70 * p_local + 0.30 * p_comm)
                 else:
-                    fake_prob = weighted
-                engine_label = self.active_engine
+                    stage1_fake = weighted
             elif p_comm is not None and p_local is not None:
-                fake_prob = 0.55 * p_comm + 0.45 * p_local
-                engine_label = self.active_engine
+                stage1_fake = 0.55 * p_comm + 0.45 * p_local
             elif p_comm is not None and p_siglip is not None:
-                fake_prob = 0.75 * p_comm + 0.25 * p_siglip
-                engine_label = self.active_engine
+                stage1_fake = 0.75 * p_comm + 0.25 * p_siglip
             elif p_comm is not None:
-                fake_prob = p_comm
-                engine_label = self.active_engine
+                stage1_fake = p_comm
             elif p_local is not None:
-                fake_prob = p_local
-                engine_label = self.active_engine
+                stage1_fake = p_local
             else:
                 raise RuntimeError(self.load_error or "No deepfake detection models are loaded.")
+
+            fake_prob = stage1_fake
+            engine_label = self.active_engine
+
+            # Stage 2: Automatic Triple-Consensus Face-Swap Gate (when Stage 1 predicts Real)
+            if (
+                stage1_fake < 0.50
+                and self.wvolf_spec is not None
+                and self.adieee_spec is not None
+                and self.dima_spec is not None
+            ):
+                p_wvolf = self._predict_hf_score(self.wvolf_spec, tight, use_2tta=False)
+                p_adieee = self._predict_hf_score(self.adieee_spec, tight, use_2tta=False)
+                p_dima = self._predict_hf_score(self.dima_spec, tight, use_2tta=False)
+
+                if p_wvolf >= 0.95 and p_adieee >= 0.70 and p_dima >= 0.90:
+                    gate_score = 0.35 * p_wvolf + 0.35 * p_dima + 0.30 * p_adieee
+                    fake_prob = gate_score
+                    faceswap_gate_triggered = True
+                    engine_label = "Auto Multi-Domain Detector (Face-Swap Consensus Triggered)"
+                    gate_display = gate_score
+                else:
+                    gate_display = min(p_wvolf, p_adieee, p_dima)
+
+                model_votes.append({
+                    "name": "Face-Swap Consensus Gate (Wvolf + DFDC + dima806)",
+                    "fake_probability": round(gate_display, 4),
+                })
 
         fake_prob = float(np.clip(fake_prob, 0.0, 1.0))
         real_prob = 1.0 - fake_prob
@@ -364,7 +418,7 @@ class DeepfakeDetectionEngine:
         forensics_scores: Dict[str, float] = {}
         if include_visuals:
             is_fake = verdict == "Fake"
-            if norm_mode == "faceswap" and self.wvolf_spec is not None:
+            if (norm_mode == "faceswap" or faceswap_gate_triggered) and self.wvolf_spec is not None:
                 gradcam_b64 = self._explain_hf_specialist(self.wvolf_spec, tight, is_fake=is_fake)
             elif (
                 norm_mode == "community"
@@ -414,7 +468,7 @@ class DeepfakeDetectionEngine:
         max_frames: int = 16,
         mode: str = "ensemble",
     ) -> Dict[str, Any]:
-        """Samples evenly spaced video frames, runs specialist ensemble + face crop, and aggregates verdict."""
+        """Samples evenly spaced video frames, runs two-stage ensemble + face crop, and aggregates verdict."""
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
             raise ValueError("Unable to open video file for decoding.")
